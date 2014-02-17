@@ -114,10 +114,8 @@ func (p *Phantom) Run(jsFunc string, res *interface{}) error {
 				fmt.Printf("LOG %s\n", scanner.Text())
 			}
 		}
-		fmt.Println("end of scanner", scanner.Err())
 	}()
 	text := <-resMsg
-	fmt.Println("READING", text)
 	if res != nil {
 		err = json.Unmarshal([]byte(text), res)
 		if err != nil {

@@ -39,7 +39,6 @@
    */
   function captureInput() {
     var lines = [];
-    system.stdout.writeLine('[WAITING]');
     var l = system.stdin.readLine();
     while (l !== 'END') {
       lines.push(l);
@@ -75,7 +74,7 @@
    */
   function evaluate(id, input) {
     var func, args;
-    system.stdout.writeLine("NEW" + id + " " + input);
+    // system.stdout.writeLine("NEW" + id + " "  );
     try {
       eval("func = " + input);
       args = func && (args = func.toString().match(/^function\s+(?:\w+)?\(([^\)]*)\)/m)[1].replace(/\s+/, "")) && args.split(',');

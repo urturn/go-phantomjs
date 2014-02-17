@@ -9,6 +9,7 @@ func Example() {
 	if err != nil {
 		panic(err)
 	}
+	defer p.Exit() // Don't forget to kill phantomjs at some point.
 	var result interface{}
 	err = p.Run("function() { return 2 + 2 }", &result)
 	if err != nil {

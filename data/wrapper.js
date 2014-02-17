@@ -1,4 +1,7 @@
-var global = this;
+// THIS FILE MUST BE COMPILED USING
+// `go-bindata -pkg=phantomjs data`
+// to be included in the project
+
 (function() {
   var system = require('system');
   var id = 0;

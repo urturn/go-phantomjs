@@ -125,16 +125,9 @@ func (p *Phantom) Run(jsFunc string, res *interface{}) error {
 	return nil
 }
 
-func (p *Phantom) sendLine(lines ...string) error {
-	for _, l := range lines {
-		_, err := io.WriteString(p.in, l+"\n")
-		if err != nil {
-			return errors.New("Cannot Send: `" + l + "`")
-		}
-	}
-	return nil
-}
-
+/*
+Eval `jsCode` in the main context.
+*/
 func (p *Phantom) Load(jsCode string) error {
 	return p.sendLine("EVAL", jsCode, "END")
 }
@@ -156,4 +149,14 @@ func createWrapperFile() (fileName string, err error) {
 		return "", err
 	}
 	return wrapper.Name(), nil
+}
+
+func (p *Phantom) sendLine(lines ...string) error {
+	for _, l := range lines {
+		_, err := io.WriteString(p.in, l+"\n")
+		if err != nil {
+			return errors.New("Cannot Send: `" + l + "`")
+		}
+	}
+	return nil
 }

@@ -4,7 +4,7 @@ go-phantomjs
 A tiny phantomjs wrapper for go
 
 Usage
-```
+```go
 import (
   "github.com/urturn/go-phantomjs" // exported package is phantomjs
 )

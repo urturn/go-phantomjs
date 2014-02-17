@@ -52,6 +52,14 @@ func TestRunMultipleCommands(t *testing.T) {
 	assertFloatResult("function() {return 1}", 1, p, t)
 }
 
+func TestLoadGlobal(t *testing.T) {
+	p, err := Start()
+	failOnError(err, t)
+	defer p.Exit()
+	p.Load("function result(result) { return result; }\nvar a = 2")
+	assertFloatResult("function() {return result(a);}", 2, p, t)
+}
+
 func assertFloatResult(jsFunc string, expected float64, p *Phantom, t *testing.T) {
 	var r interface{}
 	err := p.Run(jsFunc, &r)

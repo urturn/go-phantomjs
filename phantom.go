@@ -3,6 +3,7 @@ package phantomjs
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -72,9 +73,12 @@ and wait for the command to end.
 Return an error if one occured during exit command or if the program output a error value
 */
 func (p *Phantom) Exit() error {
-	io.WriteString(p.in, "function(){ phantom.exit() }\nEND\n")
+	err := p.Load("phantom.exit()")
+	if err != nil {
+		return err
+	}
 
-	err := p.cmd.Wait()
+	err = p.cmd.Wait()
 	if err != nil {
 		return err
 	}
@@ -93,8 +97,7 @@ The result can be either in the return value of the function or the first argume
 to the function first arguments.
 */
 func (p *Phantom) Run(jsFunc string, res *interface{}) error {
-	_, err := io.WriteString(p.in, jsFunc)
-	_, err = io.WriteString(p.in, "\nEND\n")
+	err := p.sendLine("RUN", jsFunc, "END")
 	if err != nil {
 		return err
 	}
@@ -122,6 +125,20 @@ func (p *Phantom) Run(jsFunc string, res *interface{}) error {
 		}
 	}
 	return nil
+}
+
+func (p *Phantom) sendLine(lines ...string) error {
+	for _, l := range lines {
+		_, err := io.WriteString(p.in, l+"\n")
+		if err != nil {
+			return errors.New("Cannot Send: `" + l + "`")
+		}
+	}
+	return nil
+}
+
+func (p *Phantom) Load(jsCode string) error {
+	return p.sendLine("EVAL", jsCode, "END")
 }
 
 func createWrapperFile() (fileName string, err error) {

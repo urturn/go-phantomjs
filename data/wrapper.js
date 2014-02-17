@@ -1,3 +1,4 @@
+var global = this;
 (function() {
   var system = require('system');
   var id = 0;
@@ -10,7 +11,20 @@
       lines.push(l);
       l = system.stdin.readLine();
     }
-    evaluate(id++, lines.join('\n'));
+    var command = lines.splice(0, 1)[0];
+    if (command === 'EVAL') {
+      try {
+        eval.call(this, lines.join('\n'));
+      } catch (ex) {
+        system.stdout.writeLine("Error during EVAL of" + lines.join('\n'));
+      }
+      setTimeout(captureInput, 0);
+    } else if (command === 'RUN') {
+      evaluate(id++, lines.join('\n'));
+    } else {
+      system.stdout.writeLine("Invalid command:<" + command+">");
+      setTimeout(captureInput, 0);
+    }
   }
 
   function doneFunc(id) {

@@ -34,8 +34,6 @@ func Start() (*Phantom, error) {
 	nbInstance += 1
 	cmd := exec.Command("phantomjs", wrapperFileName)
 
-	cmd.Stderr = os.Stderr
-
 	inPipe, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err
@@ -45,17 +43,17 @@ func Start() (*Phantom, error) {
 	if err != nil {
 		return nil, err
 	}
-	/*
-		errPipe, err := cmd.StderrPipe()
-		if err != nil {
-			return nil, err
-		}
-	*/
+
+	errPipe, err := cmd.StderrPipe()
+	if err != nil {
+		return nil, err
+	}
 
 	p := Phantom{
-		cmd: cmd,
-		in:  inPipe,
-		out: outPipe,
+		cmd:    cmd,
+		in:     inPipe,
+		out:    outPipe,
+		errout: errPipe,
 	}
 	err = cmd.Start()
 
@@ -101,28 +99,48 @@ func (p *Phantom) Run(jsFunc string, res *interface{}) error {
 	if err != nil {
 		return err
 	}
-	scanner := bufio.NewScanner(p.out)
+	scannerOut := bufio.NewScanner(p.out)
+	scannerErrorOut := bufio.NewScanner(p.errout)
 	resMsg := make(chan string)
+	errMsg := make(chan error)
+	defer close(resMsg)
+	defer close(errMsg)
 	go func() {
-		for scanner.Scan() {
-			line := scanner.Text()
+		for scannerOut.Scan() {
+			line := scannerOut.Text()
 			parts := strings.SplitN(line, " ", 2)
 			if strings.HasPrefix(line, "RES") {
 				resMsg <- parts[1]
 				break
 			} else {
-				fmt.Printf("LOG %s\n", scanner.Text())
+				fmt.Printf("LOG %s\n", line)
 			}
 		}
 	}()
-	text := <-resMsg
-	if res != nil {
-		err = json.Unmarshal([]byte(text), res)
-		if err != nil {
-			return err
+	go func() {
+		for scannerErrorOut.Scan() {
+			line := scannerErrorOut.Text()
+			parts := strings.SplitN(line, " ", 2)
+			if strings.HasPrefix(line, "RES") {
+				errMsg <- errors.New(parts[1])
+				break
+			} else {
+				fmt.Printf("LOG %s\n", line)
+			}
 		}
+	}()
+	select {
+	case text := <-resMsg:
+		if res != nil {
+			err = json.Unmarshal([]byte(text), res)
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	case err := <-errMsg:
+		return err
 	}
-	return nil
 }
 
 /*

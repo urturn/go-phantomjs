@@ -4,7 +4,7 @@ import (
 	"fmt"
 )
 
-func Example() {
+func ExampleWithResult() {
 	p, err := Start()
 	if err != nil {
 		panic(err)
@@ -21,4 +21,18 @@ func Example() {
 	}
 	fmt.Println(number)
 	// Output: 4
+}
+
+func ExampleWithError() {
+	p, err := Start()
+	if err != nil {
+		panic(err)
+	}
+	defer p.Exit() // Don't forget to kill phantomjs at some point.
+	var result interface{}
+	err = p.Run("function() { throw 'Ooops' }", &result)
+	if err != nil {
+		fmt.Println(err)
+	}
+	// Output: "Ooops"
 }

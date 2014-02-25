@@ -103,15 +103,14 @@ func (p *Phantom) Run(jsFunc string, res *interface{}) error {
 	scannerErrorOut := bufio.NewScanner(p.errout)
 	resMsg := make(chan string)
 	errMsg := make(chan error)
-	defer close(resMsg)
-	defer close(errMsg)
 	go func() {
 		for scannerOut.Scan() {
 			line := scannerOut.Text()
 			parts := strings.SplitN(line, " ", 2)
 			if strings.HasPrefix(line, "RES") {
 				resMsg <- parts[1]
-				break
+				close(resMsg)
+				return
 			} else {
 				fmt.Printf("LOG %s\n", line)
 			}
@@ -123,7 +122,8 @@ func (p *Phantom) Run(jsFunc string, res *interface{}) error {
 			parts := strings.SplitN(line, " ", 2)
 			if strings.HasPrefix(line, "RES") {
 				errMsg <- errors.New(parts[1])
-				break
+				close(errMsg)
+				return
 			} else {
 				fmt.Printf("LOG %s\n", line)
 			}

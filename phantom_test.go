@@ -60,6 +60,20 @@ func TestLoadGlobal(t *testing.T) {
 	assertFloatResult("function() {return result(a);}", 2, p, t)
 }
 
+func TestMessageSentAfterAnErrorDontCrash(t *testing.T) {
+	p, err := Start()
+	failOnError(err, t)
+	defer p.Exit()
+	p.Run("function(done) {done(null, 'manual'); done('should not panic');}", nil)
+}
+
+func TestDoubleErrorSendDontCrash(t *testing.T) {
+	p, err := Start()
+	failOnError(err, t)
+	defer p.Exit()
+	p.Run("function(done) {done(null, 'manual'); done(null, 'should not panic');}", nil)
+}
+
 func assertFloatResult(jsFunc string, expected float64, p *Phantom, t *testing.T) {
 	var r interface{}
 	err := p.Run(jsFunc, &r)

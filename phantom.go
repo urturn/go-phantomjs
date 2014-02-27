@@ -27,12 +27,13 @@ Create a new `Phantomjs` instance and return it as a pointer.
 
 If an error occurs during command start, return it instead.
 */
-func Start() (*Phantom, error) {
+func Start(args ...string) (*Phantom, error) {
 	if nbInstance == 0 {
 		wrapperFileName, _ = createWrapperFile()
 	}
 	nbInstance += 1
-	cmd := exec.Command("phantomjs", wrapperFileName)
+	args = append(args, wrapperFileName)
+	cmd := exec.Command("phantomjs", args...)
 
 	inPipe, err := cmd.StdinPipe()
 	if err != nil {

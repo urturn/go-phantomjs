@@ -11,6 +11,13 @@ func TestStartStop(t *testing.T) {
 	failOnError(err, t)
 }
 
+func TestStartStopWithArgs(t *testing.T) {
+	p, err := Start("--web-security=no")
+	failOnError(err, t)
+	err = p.Exit()
+	failOnError(err, t)
+}
+
 func TestRunACommand(t *testing.T) {
 	p, err := Start()
 	defer p.Exit()

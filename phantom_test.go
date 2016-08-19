@@ -2,6 +2,7 @@ package phantomjs
 
 import (
 	"log"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -84,6 +85,22 @@ func TestDoubleErrorSendDontCrash(t *testing.T) {
 	p.Run("function(done) {done(null, 'manual'); done(null, 'should not panic');}", nil)
 }
 
+func TestThrow(t *testing.T) {
+	p, err := Start()
+	if err != nil {
+		panic(err)
+	}
+	defer p.Exit() // Don't forget to kill phantomjs at some point.
+	var result interface{}
+	err = p.Run("function() { throw 'Ooops' }", &result)
+	if err == nil {
+		t.Fatal("Expected an Error")
+	}
+	if !strings.Contains("\"Ooops\"", err.Error()) {
+		t.Fatal(err)
+	}
+}
+
 func TestComplex(t *testing.T) {
 	var wg sync.WaitGroup
 
@@ -122,6 +139,45 @@ func TestComplex(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+func TestForceShutdown(t *testing.T) {
+	p, err := Start()
+	failOnError(err, t)
+
+	for i := 0; i < 5; i++ {
+		var r interface{}
+
+		err = p.Run(`function(done){
+							var a = 0;
+							var b = 1;
+							var c = 0;
+							for(var i=2; i<=25; i++)
+							{
+								c = b + a;
+								a = b;
+								b = c;
+							}
+							done(c, undefined);
+				}`, &r)
+		if i == 2 {
+			p.ForceShutdown()
+		}
+		if err == nil {
+			v, ok := r.(float64)
+			if !ok {
+				t.Errorf("Should be an int but is %v", r)
+				return
+			}
+			if v != 75025 {
+				t.Errorf("Should be %d but is %f", 75025, v)
+			}
+		} else {
+			if !strings.Contains(err.Error(), "no longer running") && !strings.Contains(err.Error(), "phantomjs instance might be dead") {
+				t.Fatal(err)
+			}
+		}
+	}
 }
 
 func assertFloatResult(jsFunc string, expected float64, p *Phantom, t *testing.T) {

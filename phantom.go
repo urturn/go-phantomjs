@@ -15,11 +15,12 @@ import (
 
 // Phantom a data structure that interacts with the wrapper file
 type Phantom struct {
-	cmd    *exec.Cmd
-	in     io.WriteCloser
-	out    io.ReadCloser
-	errout io.ReadCloser
-	// wrapperFileName string
+	cmd              *exec.Cmd
+	in               io.WriteCloser
+	out              io.ReadCloser
+	errout           io.ReadCloser
+	scannerErrorLock *sync.Mutex
+	scannerLock      *sync.Mutex
 }
 
 var nbInstance = 0
@@ -59,10 +60,12 @@ func Start(args ...string) (*Phantom, error) {
 	}
 
 	p := Phantom{
-		cmd:    cmd,
-		in:     inPipe,
-		out:    outPipe,
-		errout: errPipe,
+		cmd:              cmd,
+		in:               inPipe,
+		out:              outPipe,
+		errout:           errPipe,
+		scannerErrorLock: new(sync.Mutex),
+		scannerLock:      new(sync.Mutex),
 	}
 	err = cmd.Start()
 
@@ -80,13 +83,34 @@ and wait for the command to end.
 Return an error if one occured during exit command or if the program output a error value
 */
 func (p *Phantom) Exit() error {
+
 	err := p.Load("phantom.exit()")
 	if err != nil {
 		return err
 	}
-
+	p.scannerErrorLock.Lock()
+	p.scannerLock.Lock()
 	err = p.cmd.Wait()
+	p.scannerErrorLock.Unlock()
+	p.scannerLock.Unlock()
 	if err != nil {
+		return err
+	}
+	fileLock.Lock()
+	nbInstance--
+	if nbInstance == 0 {
+		os.Remove(wrapperFileName)
+	}
+	fileLock.Unlock()
+	return nil
+}
+
+/*
+ForceShutdown will forcefully kill phantomjs.
+This will completly terminate the proccess compared to Exit which will safely Exit
+*/
+func (p *Phantom) ForceShutdown() error {
+	if err := p.cmd.Process.Kill(); err != nil {
 		return err
 	}
 	fileLock.Lock()
@@ -115,27 +139,35 @@ func (p *Phantom) Run(jsFunc string, res *interface{}) error {
 	resMsg := make(chan string)
 	errMsg := make(chan error)
 	go func() {
-		for scannerOut.Scan() {
-			line := scannerOut.Text()
-			parts := strings.SplitN(line, " ", 2)
-			if strings.HasPrefix(line, "RES") {
-				resMsg <- parts[1]
-				close(resMsg)
+		for {
+			value, scanError := readScanner(p.scannerLock, scannerOut)
+			if scanError != nil {
+				errMsg <- scanError
 				return
 			}
-			fmt.Printf("LOG %s\n", line)
+
+			if value == "" {
+				// Nothing to see here
+				return
+			}
+
+			resMsg <- value
 		}
 	}()
 	go func() {
-		for scannerErrorOut.Scan() {
-			line := scannerErrorOut.Text()
-			parts := strings.SplitN(line, " ", 2)
-			if strings.HasPrefix(line, "RES") {
-				errMsg <- errors.New(parts[1])
-				close(errMsg)
+		for {
+			value, scanError := readScanner(p.scannerErrorLock, scannerErrorOut)
+			if scanError != nil {
+				errMsg <- scanError
 				return
 			}
-			fmt.Printf("LOG %s\n", line)
+
+			if value == "" {
+				// Nothing to see here
+				return
+			}
+
+			errMsg <- errors.New(value)
 		}
 	}()
 	select {
@@ -179,11 +211,38 @@ func createWrapperFile() (fileName string, err error) {
 	return wrapper.Name(), nil
 }
 
+func readScanner(scannerLock *sync.Mutex, scanner *bufio.Scanner) (string, error) {
+	scannerLock.Lock()
+	read := scanner.Scan()
+	scannerLock.Unlock()
+	if !read {
+		return "", errors.New("this instance of phantomjs is no longer running")
+	}
+
+	if scanner.Err() != nil {
+		return "", scanner.Err()
+	}
+
+	line := scanner.Text()
+	parts := strings.SplitN(line, " ", 2)
+
+	if strings.HasPrefix(line, "RES") {
+		return parts[1], nil
+	} else if line != "" {
+		fmt.Printf("LOG %s\n", line)
+		return "", nil
+	} else if line != " " {
+		return "", errors.New("Error reading response, just got a space")
+	}
+	fmt.Printf("LOG |%s|\n", line)
+	return "", errors.New("Error reading response")
+}
+
 func (p *Phantom) sendLine(lines ...string) error {
 	for _, l := range lines {
 		_, err := io.WriteString(p.in, l+"\n")
 		if err != nil {
-			return errors.New("Cannot Send: `" + l + "`")
+			return errors.New("Cannot Send: `" + l + "`" + "phantomjs instance might be dead")
 		}
 	}
 	return nil

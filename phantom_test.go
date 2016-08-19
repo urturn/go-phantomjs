@@ -1,7 +1,10 @@
 package phantomjs
 
 import (
+	"log"
+	"sync"
 	"testing"
+	"time"
 )
 
 func TestStartStop(t *testing.T) {
@@ -79,6 +82,46 @@ func TestDoubleErrorSendDontCrash(t *testing.T) {
 	failOnError(err, t)
 	defer p.Exit()
 	p.Run("function(done) {done(null, 'manual'); done(null, 'should not panic');}", nil)
+}
+
+func TestComplex(t *testing.T) {
+	var wg sync.WaitGroup
+
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			p, err := Start()
+			failOnError(err, t)
+			defer p.Exit()
+			var r interface{}
+			begin := time.Now()
+
+			p.Run(`function(done){
+							var a = 0;
+							var b = 1;
+							var c = 0;
+							for(var i=2; i<=25; i++)
+							{
+    						c = b + a;
+								a = b;
+								b = c;
+							}
+							done(c, undefined);
+				}`, &r)
+			log.Println("Completed Run in", time.Since(begin))
+			failOnError(err, t)
+			v, ok := r.(float64)
+			if !ok {
+				t.Errorf("Should be an int but is %v", r)
+				return
+			}
+			if v != 75025 {
+				t.Errorf("Should be %d but is %f", 75025, v)
+			}
+		}()
+	}
+	wg.Wait()
 }
 
 func assertFloatResult(jsFunc string, expected float64, p *Phantom, t *testing.T) {

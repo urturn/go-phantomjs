@@ -10,28 +10,36 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 )
 
+// Phantom a data structure that interacts with the wrapper file
 type Phantom struct {
 	cmd    *exec.Cmd
 	in     io.WriteCloser
 	out    io.ReadCloser
 	errout io.ReadCloser
+	// wrapperFileName string
 }
 
 var nbInstance = 0
+
 var wrapperFileName = ""
+var fileLock = new(sync.Mutex)
 
 /*
+Start create phantomjs file
 Create a new `Phantomjs` instance and return it as a pointer.
 
 If an error occurs during command start, return it instead.
 */
 func Start(args ...string) (*Phantom, error) {
+	fileLock.Lock()
 	if nbInstance == 0 {
 		wrapperFileName, _ = createWrapperFile()
 	}
-	nbInstance += 1
+	nbInstance++
+	fileLock.Unlock()
 	args = append(args, wrapperFileName)
 	cmd := exec.Command("phantomjs", args...)
 
@@ -81,19 +89,21 @@ func (p *Phantom) Exit() error {
 	if err != nil {
 		return err
 	}
-	nbInstance -= 1
+	fileLock.Lock()
+	nbInstance--
 	if nbInstance == 0 {
 		os.Remove(wrapperFileName)
 	}
-
+	fileLock.Unlock()
 	return nil
 }
 
 /*
 Run the javascript function passed as a string and wait for the result.
 
-The result can be either in the return value of the function or the first argument passed
-to the function first arguments.
+The result can be either in the return value of the function or,
+You can pass a function a closure which can take two arguments 1st is the successfull response
+the 2nd is an err. See TestComplex in the phantom_test.go
 */
 func (p *Phantom) Run(jsFunc string, res *interface{}) error {
 	err := p.sendLine("RUN", jsFunc, "END")
@@ -112,9 +122,8 @@ func (p *Phantom) Run(jsFunc string, res *interface{}) error {
 				resMsg <- parts[1]
 				close(resMsg)
 				return
-			} else {
-				fmt.Printf("LOG %s\n", line)
 			}
+			fmt.Printf("LOG %s\n", line)
 		}
 	}()
 	go func() {
@@ -125,9 +134,8 @@ func (p *Phantom) Run(jsFunc string, res *interface{}) error {
 				errMsg <- errors.New(parts[1])
 				close(errMsg)
 				return
-			} else {
-				fmt.Printf("LOG %s\n", line)
 			}
+			fmt.Printf("LOG %s\n", line)
 		}
 	}()
 	select {
@@ -145,6 +153,7 @@ func (p *Phantom) Run(jsFunc string, res *interface{}) error {
 }
 
 /*
+Load will load more code
 Eval `jsCode` in the main context.
 */
 func (p *Phantom) Load(jsCode string) error {

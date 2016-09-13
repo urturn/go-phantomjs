@@ -1,7 +1,6 @@
 package phantomjs
 
 import (
-	"bufio"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -134,8 +133,8 @@ func (p *Phantom) Run(jsFunc string, res *interface{}) error {
 	if err != nil {
 		return err
 	}
-	scannerOut := bufio.NewScanner(p.out)
-	scannerErrorOut := bufio.NewScanner(p.errout)
+	scannerOut := NewPhantomScanner(p.out)
+	scannerErrorOut := NewPhantomScanner(p.errout)
 	resMsg := make(chan string)
 	errMsg := make(chan error)
 	go func() {
@@ -208,7 +207,7 @@ func createWrapperFile() (fileName string, err error) {
 	return wrapper.Name(), nil
 }
 
-func readScanner(scannerLock *sync.Mutex, scanner *bufio.Scanner) (string, error) {
+func readScanner(scannerLock *sync.Mutex, scanner *PhantomScanner) (string, error) {
 	read := true
 	for read {
 		scannerLock.Lock()

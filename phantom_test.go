@@ -145,9 +145,13 @@ func TestForceShutdown(t *testing.T) {
 	p, err := Start()
 	failOnError(err, t)
 
+	count := 0
 	for i := 0; i < 5; i++ {
 		var r interface{}
 
+		if i == 2 {
+			p.ForceShutdown()
+		}
 		err = p.Run(`function(done){
 							var a = 0;
 							var b = 1;
@@ -160,9 +164,7 @@ func TestForceShutdown(t *testing.T) {
 							}
 							done(c, undefined);
 				}`, &r)
-		if i == 2 {
-			p.ForceShutdown()
-		}
+
 		if err == nil {
 			v, ok := r.(float64)
 			if !ok {
@@ -171,12 +173,17 @@ func TestForceShutdown(t *testing.T) {
 			}
 			if v != 75025 {
 				t.Errorf("Should be %d but is %f", 75025, v)
+			} else {
+				count++
 			}
 		} else {
 			if !strings.Contains(err.Error(), "no longer running") && !strings.Contains(err.Error(), "phantomjs instance might be dead") {
 				t.Fatal(err)
 			}
 		}
+	}
+	if count != 2 {
+		t.Fatalf("Didn' reaach distination %d", count)
 	}
 }
 

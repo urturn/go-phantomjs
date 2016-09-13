@@ -139,36 +139,33 @@ func (p *Phantom) Run(jsFunc string, res *interface{}) error {
 	resMsg := make(chan string)
 	errMsg := make(chan error)
 	go func() {
-		for {
-			value, scanError := readScanner(p.scannerLock, scannerOut)
-			if scanError != nil {
-				errMsg <- scanError
-				return
-			}
+		value, scanError := readScanner(p.scannerLock, scannerOut)
 
-			if value == "" {
-				// Nothing to see here
-				return
-			}
-
-			resMsg <- value
+		if scanError != nil {
+			errMsg <- scanError
+			return
 		}
+
+		if value == "" {
+			// Nothing to see here
+			return
+		}
+
+		resMsg <- value
 	}()
 	go func() {
-		for {
-			value, scanError := readScanner(p.scannerErrorLock, scannerErrorOut)
-			if scanError != nil {
-				errMsg <- scanError
-				return
-			}
-
-			if value == "" {
-				// Nothing to see here
-				return
-			}
-
-			errMsg <- errors.New(value)
+		value, scanError := readScanner(p.scannerErrorLock, scannerErrorOut)
+		if scanError != nil {
+			errMsg <- scanError
+			return
 		}
+
+		if value == "" {
+			// Nothing to see here
+			return
+		}
+
+		errMsg <- errors.New(value)
 	}()
 	select {
 	case text := <-resMsg:
@@ -212,30 +209,32 @@ func createWrapperFile() (fileName string, err error) {
 }
 
 func readScanner(scannerLock *sync.Mutex, scanner *bufio.Scanner) (string, error) {
-	scannerLock.Lock()
-	read := scanner.Scan()
-	scannerLock.Unlock()
-	if !read {
-		return "", errors.New("this instance of phantomjs is no longer running")
-	}
+	read := true
+	for read {
+		scannerLock.Lock()
+		read := scanner.Scan()
+		scannerLock.Unlock()
+		if !read {
+			return "", errors.New("phantomjs instance is no longer running")
+		}
 
-	if scanner.Err() != nil {
-		return "", scanner.Err()
-	}
+		if scanner.Err() != nil {
+			return "", scanner.Err()
+		}
 
-	line := scanner.Text()
-	parts := strings.SplitN(line, " ", 2)
+		line := scanner.Text()
+		parts := strings.SplitN(line, " ", 2)
 
-	if strings.HasPrefix(line, "RES") {
-		return parts[1], nil
-	} else if line != "" {
-		fmt.Printf("LOG %s\n", line)
-		return "", nil
-	} else if line != " " {
-		return "", errors.New("Error reading response, just got a space")
+		if strings.HasPrefix(line, "RES") {
+			return parts[1], nil
+		} else if line != "" {
+			fmt.Printf("LOG %s\n", line)
+			// return "", nil
+		} else if line != " " {
+			// return "", errors.New("Error reading response, just got a space")
+		}
 	}
-	fmt.Printf("LOG |%s|\n", line)
-	return "", errors.New("Error reading response")
+	return "", errors.New("No Response")
 }
 
 func (p *Phantom) sendLine(lines ...string) error {

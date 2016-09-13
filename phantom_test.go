@@ -183,7 +183,36 @@ func TestForceShutdown(t *testing.T) {
 		}
 	}
 	if count != 2 {
-		t.Fatalf("Didn' reaach distination %d", count)
+		t.Fatalf("Didn' reach distination %d", count)
+	}
+}
+
+func TestMultipleLogs(t *testing.T) {
+	p, err := Start()
+	failOnError(err, t)
+	var r interface{}
+
+	err = p.Run(`function(done){
+						var a = 0;
+						var b = 1;
+						var c = 0;
+						for(var i=2; i<=25; i++)
+						{
+							c = b + a;
+							a = b;
+							b = c;
+							console.log(c)
+						}
+						done(c, undefined);
+			}`, &r)
+	failOnError(err, t)
+	v, ok := r.(float64)
+	if !ok {
+		t.Errorf("Should be an int but is %v", r)
+		return
+	}
+	if v != 75025 {
+		t.Errorf("Should be %d but is %f", 75025, v)
 	}
 }
 

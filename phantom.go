@@ -224,6 +224,8 @@ func createWrapperFile() (fileName string, err error) {
 }
 
 func readScanner(scannerLock *sync.Mutex, scanner *bufio.Scanner) (string, error) {
+	buf := make([]byte, maxScannerTokenSize)
+	scanner.Buffer(buf, maxScannerTokenSize)
 	read := true
 	for read {
 		scannerLock.Lock()

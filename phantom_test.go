@@ -144,6 +144,7 @@ func TestComplex(t *testing.T) {
 func TestForceShutdown(t *testing.T) {
 	p, err := Start()
 	failOnError(err, t)
+	defer p.Exit()
 
 	count := 0
 	for i := 0; i < 5; i++ {
@@ -189,6 +190,7 @@ func TestForceShutdown(t *testing.T) {
 
 func TestMultipleLogs(t *testing.T) {
 	p, err := Start()
+	defer p.Exit()
 	failOnError(err, t)
 	var r interface{}
 

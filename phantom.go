@@ -1,6 +1,7 @@
 package phantomjs
 
 import (
+	"bufio"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -26,6 +27,8 @@ var nbInstance = 0
 
 var wrapperFileName = ""
 var fileLock = new(sync.Mutex)
+
+var maxScannerTokenSize = 2048
 
 /*
 Start create phantomjs file
@@ -122,6 +125,18 @@ func (p *Phantom) ForceShutdown() error {
 }
 
 /*
+SetMaxTokenSize will set the max Scanner Token Size
+If your script will return a large input use this.
+Specify the number of KB
+Default value is 2048KB
+*/
+func (p *Phantom) SetMaxTokenSize(tokenSize int) {
+	if tokenSize > 0 {
+		maxScannerTokenSize = tokenSize
+	}
+}
+
+/*
 Run the javascript function passed as a string and wait for the result.
 
 The result can be either in the return value of the function or,
@@ -133,8 +148,9 @@ func (p *Phantom) Run(jsFunc string, res *interface{}) error {
 	if err != nil {
 		return err
 	}
-	scannerOut := NewPhantomScanner(p.out)
-	scannerErrorOut := NewPhantomScanner(p.errout)
+
+	scannerOut := bufio.NewScanner(bufio.NewReaderSize(p.out, maxScannerTokenSize*1024))
+	scannerErrorOut := bufio.NewScanner(bufio.NewReaderSize(p.errout, maxScannerTokenSize*1024))
 	resMsg := make(chan string)
 	errMsg := make(chan error)
 	go func() {
@@ -207,18 +223,18 @@ func createWrapperFile() (fileName string, err error) {
 	return wrapper.Name(), nil
 }
 
-func readScanner(scannerLock *sync.Mutex, scanner *PhantomScanner) (string, error) {
+func readScanner(scannerLock *sync.Mutex, scanner *bufio.Scanner) (string, error) {
 	read := true
 	for read {
 		scannerLock.Lock()
 		read := scanner.Scan()
 		scannerLock.Unlock()
-		if !read {
-			return "", errors.New("phantomjs instance is no longer running")
-		}
 
 		if scanner.Err() != nil {
 			return "", scanner.Err()
+		}
+		if !read {
+			break
 		}
 
 		line := scanner.Text()
@@ -233,7 +249,7 @@ func readScanner(scannerLock *sync.Mutex, scanner *PhantomScanner) (string, erro
 			// return "", errors.New("Error reading response, just got a space")
 		}
 	}
-	return "", errors.New("No Response")
+	return "", errors.New("PhantomJS Error, Instance is no longer running, try increasing max token size")
 }
 
 func (p *Phantom) sendLine(lines ...string) error {

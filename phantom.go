@@ -149,8 +149,8 @@ func (p *Phantom) Run(jsFunc string, res *interface{}) error {
 		return err
 	}
 
-	scannerOut := bufio.NewScanner(bufio.NewReaderSize(p.out, maxScannerTokenSize*1024))
-	scannerErrorOut := bufio.NewScanner(bufio.NewReaderSize(p.errout, maxScannerTokenSize*1024))
+	scannerOut := bufio.NewReaderSize(p.out, maxScannerTokenSize*1024)
+	scannerErrorOut := bufio.NewReaderSize(p.errout, maxScannerTokenSize*1024)
 	resMsg := make(chan string)
 	errMsg := make(chan error)
 	go func() {
@@ -223,23 +223,24 @@ func createWrapperFile() (fileName string, err error) {
 	return wrapper.Name(), nil
 }
 
-func readScanner(scannerLock *sync.Mutex, scanner *bufio.Scanner) (string, error) {
-	buf := make([]byte, maxScannerTokenSize)
-	scanner.Buffer(buf, maxScannerTokenSize)
-	read := true
-	for read {
+func readScanner(scannerLock *sync.Mutex, reader *bufio.Reader) (string, error) {
+	for {
 		scannerLock.Lock()
-		read := scanner.Scan()
+		data, _, err := reader.ReadLine()
 		scannerLock.Unlock()
 
-		if scanner.Err() != nil {
-			return "", scanner.Err()
+		if err != nil {
+			eof := "EOF"
+			if strings.Compare(eof, err.Error()) == 0 {
+				return "", errors.New("phantomjs instance is no longer running")
+			}
+			return "", err
 		}
-		if !read {
+		if len(data) == 0 {
 			break
 		}
 
-		line := scanner.Text()
+		line := string(data)
 		parts := strings.SplitN(line, " ", 2)
 
 		if strings.HasPrefix(line, "RES") {
@@ -258,7 +259,7 @@ func (p *Phantom) sendLine(lines ...string) error {
 	for _, l := range lines {
 		_, err := io.WriteString(p.in, l+"\n")
 		if err != nil {
-			return errors.New("Cannot Send: `" + l + "`" + "phantomjs instance might be dead")
+			return errors.New("Cannot Send: `" + l + "` " + "phantomjs instance might be dead")
 		}
 	}
 	return nil

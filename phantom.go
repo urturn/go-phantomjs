@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"log"
 	"os"
 	"os/exec"
 	"strings"
@@ -15,12 +16,12 @@ import (
 
 // Phantom a data structure that interacts with the wrapper file
 type Phantom struct {
-	cmd              *exec.Cmd
-	in               io.WriteCloser
-	out              io.ReadCloser
-	errout           io.ReadCloser
-	scannerErrorLock *sync.Mutex
-	scannerLock      *sync.Mutex
+	cmd             *exec.Cmd
+	in              io.WriteCloser
+	out             io.ReadCloser
+	errout          io.ReadCloser
+	readerErrorLock *sync.Mutex
+	readerLock      *sync.Mutex
 }
 
 var nbInstance = 0
@@ -28,7 +29,7 @@ var nbInstance = 0
 var wrapperFileName = ""
 var fileLock = new(sync.Mutex)
 
-var maxScannerTokenSize = 2048
+var readerBufferSize = 2048
 
 /*
 Start create phantomjs file
@@ -62,12 +63,12 @@ func Start(args ...string) (*Phantom, error) {
 	}
 
 	p := Phantom{
-		cmd:              cmd,
-		in:               inPipe,
-		out:              outPipe,
-		errout:           errPipe,
-		scannerErrorLock: new(sync.Mutex),
-		scannerLock:      new(sync.Mutex),
+		cmd:             cmd,
+		in:              inPipe,
+		out:             outPipe,
+		errout:          errPipe,
+		readerErrorLock: new(sync.Mutex),
+		readerLock:      new(sync.Mutex),
 	}
 	err = cmd.Start()
 
@@ -90,12 +91,13 @@ func (p *Phantom) Exit() error {
 	if err != nil {
 		return err
 	}
-	p.scannerErrorLock.Lock()
-	p.scannerLock.Lock()
+	p.readerErrorLock.Lock()
+	p.readerLock.Lock()
 	err = p.cmd.Wait()
-	p.scannerErrorLock.Unlock()
-	p.scannerLock.Unlock()
+	p.readerErrorLock.Unlock()
+	p.readerLock.Unlock()
 	if err != nil {
+		log.Println(err)
 		return err
 	}
 	fileLock.Lock()
@@ -125,14 +127,14 @@ func (p *Phantom) ForceShutdown() error {
 }
 
 /*
-SetMaxTokenSize will set the max Scanner Token Size
+SetMaxBufferSize will set the max Buffer Size
 If your script will return a large input use this.
 Specify the number of KB
 Default value is 2048KB
 */
-func (p *Phantom) SetMaxTokenSize(tokenSize int) {
-	if tokenSize > 0 {
-		maxScannerTokenSize = tokenSize
+func (p *Phantom) SetMaxBufferSize(bufferSize int) {
+	if bufferSize > 0 {
+		readerBufferSize = bufferSize
 	}
 }
 
@@ -149,12 +151,12 @@ func (p *Phantom) Run(jsFunc string, res *interface{}) error {
 		return err
 	}
 
-	scannerOut := bufio.NewReaderSize(p.out, maxScannerTokenSize*1024)
-	scannerErrorOut := bufio.NewReaderSize(p.errout, maxScannerTokenSize*1024)
+	readerOut := bufio.NewReaderSize(p.out, readerBufferSize*1024)
+	readerErrorOut := bufio.NewReaderSize(p.errout, readerBufferSize*1024)
 	resMsg := make(chan string)
 	errMsg := make(chan error)
 	go func() {
-		value, scanError := readScanner(p.scannerLock, scannerOut)
+		value, scanError := readreader(p.readerLock, readerOut)
 
 		if scanError != nil {
 			errMsg <- scanError
@@ -169,7 +171,7 @@ func (p *Phantom) Run(jsFunc string, res *interface{}) error {
 		resMsg <- value
 	}()
 	go func() {
-		value, scanError := readScanner(p.scannerErrorLock, scannerErrorOut)
+		value, scanError := readreader(p.readerErrorLock, readerErrorOut)
 		if scanError != nil {
 			errMsg <- scanError
 			return
@@ -223,21 +225,23 @@ func createWrapperFile() (fileName string, err error) {
 	return wrapper.Name(), nil
 }
 
-func readScanner(scannerLock *sync.Mutex, reader *bufio.Reader) (string, error) {
+func readreader(readerLock *sync.Mutex, reader *bufio.Reader) (string, error) {
 	for {
-		scannerLock.Lock()
+		readerLock.Lock()
 		data, _, err := reader.ReadLine()
-		scannerLock.Unlock()
+		readerLock.Unlock()
 
 		if err != nil {
-			eof := "EOF"
-			if strings.Compare(eof, err.Error()) == 0 {
-				return "", errors.New("phantomjs instance is no longer running")
+			// Nothing else to read
+			if strings.Compare("EOF", err.Error()) == 0 && len(data) == 0 {
+				break
 			}
-			return "", err
-		}
-		if len(data) == 0 {
-			break
+			// Nothing to read and waiting to exit
+			if len(data) == 0 && strings.Contains(err.Error(), "bad file descriptor") {
+				break
+			} else if strings.Compare("EOF", err.Error()) != 0 && len(data) == 0 {
+				return "", err
+			}
 		}
 
 		line := string(data)
@@ -252,7 +256,7 @@ func readScanner(scannerLock *sync.Mutex, reader *bufio.Reader) (string, error) 
 			// return "", errors.New("Error reading response, just got a space")
 		}
 	}
-	return "", errors.New("PhantomJS Error, Instance is no longer running, try increasing max token size")
+	return "", errors.New("PhantomJS Error, Instance is no longer running, try increasing max buffer size")
 }
 
 func (p *Phantom) sendLine(lines ...string) error {

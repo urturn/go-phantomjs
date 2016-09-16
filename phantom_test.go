@@ -188,6 +188,44 @@ func TestForceShutdown(t *testing.T) {
 	}
 }
 
+func TestRestartInstance(t *testing.T) {
+	p, err := Start()
+	defer p.Exit()
+	failOnError(err, t)
+
+	err = p.ForceShutdown()
+	failOnError(err, t)
+
+	p, err = Start()
+	defer p.Exit()
+	failOnError(err, t)
+
+	var r interface{}
+
+	err = p.Run(`function(done){
+						var a = 0;
+						var b = 1;
+						var c = 0;
+						for(var i=2; i<=25; i++)
+						{
+							c = b + a;
+							a = b;
+							b = c;
+						}
+						done(c, undefined);
+			}`, &r)
+
+	failOnError(err, t)
+	v, ok := r.(float64)
+	if !ok {
+		t.Errorf("Should be an int but is %v", r)
+		return
+	}
+	if v != 75025 {
+		t.Errorf("Should be %d but is %f", 75025, v)
+	}
+}
+
 func TestMultipleLogs(t *testing.T) {
 	p, err := Start()
 	defer p.Exit()

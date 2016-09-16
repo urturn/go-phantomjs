@@ -114,10 +114,6 @@ ForceShutdown will forcefully kill phantomjs.
 This will completly terminate the proccess compared to Exit which will safely Exit
 */
 func (p *Phantom) ForceShutdown() error {
-	p.readerErrorLock.Lock()
-	p.readerLock.Lock()
-	defer p.readerErrorLock.Unlock()
-	defer p.readerLock.Unlock()
 
 	err := p.cmd.Process.Kill()
 

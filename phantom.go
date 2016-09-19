@@ -194,6 +194,9 @@ func (p *Phantom) Run(jsFunc string, res *interface{}) error {
 		}
 		return nil
 	case err := <-errMsg:
+		if strings.Compare(err.Error(), "EOF") == 0 {
+			return errors.New("PhantomJS is no longer running")
+		}
 		return err
 	}
 }
@@ -256,7 +259,7 @@ func readreader(readerLock *sync.Mutex, reader *bufio.Reader) (string, error) {
 			// return "", errors.New("Error reading response, just got a space")
 		}
 	}
-	return "", errors.New("PhantomJS Error, Instance is no longer running, try increasing max buffer size")
+	return "", errors.New("EOF")
 }
 
 func (p *Phantom) sendLine(lines ...string) error {

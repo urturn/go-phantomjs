@@ -16,12 +16,13 @@ import (
 
 // Phantom a data structure that interacts with the wrapper file
 type Phantom struct {
-	cmd             *exec.Cmd
-	in              io.WriteCloser
-	out             io.ReadCloser
-	errout          io.ReadCloser
-	readerErrorLock *sync.Mutex
-	readerLock      *sync.Mutex
+	cmd              *exec.Cmd
+	in               io.WriteCloser
+	out              io.ReadCloser
+	errout           io.ReadCloser
+	readerErrorLock  *sync.Mutex
+	readerLock       *sync.Mutex
+	nothingReadCount int64
 }
 
 var nbInstance = 0
@@ -30,6 +31,7 @@ var wrapperFileName = ""
 var fileLock = new(sync.Mutex)
 
 var readerBufferSize = 2048
+var maxReadTimes = 100
 
 /*
 Start create phantomjs file
@@ -63,12 +65,13 @@ func Start(args ...string) (*Phantom, error) {
 	}
 
 	p := Phantom{
-		cmd:             cmd,
-		in:              inPipe,
-		out:             outPipe,
-		errout:          errPipe,
-		readerErrorLock: new(sync.Mutex),
-		readerLock:      new(sync.Mutex),
+		cmd:              cmd,
+		in:               inPipe,
+		out:              outPipe,
+		errout:           errPipe,
+		readerErrorLock:  new(sync.Mutex),
+		readerLock:       new(sync.Mutex),
+		nothingReadCount: 0,
 	}
 	err = cmd.Start()
 
@@ -139,6 +142,16 @@ func (p *Phantom) SetMaxBufferSize(bufferSize int) {
 }
 
 /*
+SetMaxReadTimes will set the max read times
+If the
+*/
+func (p *Phantom) SetMaxReadTimes(bufferSize int) {
+	if bufferSize > 0 {
+		readerBufferSize = bufferSize
+	}
+}
+
+/*
 Run the javascript function passed as a string and wait for the result.
 
 The result can be either in the return value of the function or,
@@ -191,9 +204,6 @@ func (p *Phantom) Run(jsFunc string, res *interface{}) error {
 			if err != nil {
 				return err
 			}
-			if len([]byte(text)) == 0 {
-				return errors.New("No Response Data")
-			}
 		}
 		return nil
 	case err := <-errMsg:
@@ -232,6 +242,7 @@ func createWrapperFile() (fileName string, err error) {
 }
 
 func readreader(readerLock *sync.Mutex, reader *bufio.Reader) (string, error) {
+	var count = 0
 	for {
 		readerLock.Lock()
 		data, _, err := reader.ReadLine()
@@ -240,11 +251,15 @@ func readreader(readerLock *sync.Mutex, reader *bufio.Reader) (string, error) {
 		if err != nil {
 			// Nothing else to read
 			if strings.Compare("EOF", err.Error()) == 0 && len(data) == 0 {
-				break
+				// like the scanner if 100 empty reads panic
+				count++
+				if count >= 100 {
+					break
+				}
 			}
 			// Nothing to read and waiting to exit
 			if len(data) == 0 && strings.Contains(err.Error(), "bad file descriptor") {
-				break
+				return "", errors.New("Wrapper Error: Bad File Descriptor")
 			} else if strings.Compare("EOF", err.Error()) != 0 && len(data) == 0 {
 				return "", err
 			}

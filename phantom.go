@@ -191,6 +191,9 @@ func (p *Phantom) Run(jsFunc string, res *interface{}) error {
 			if err != nil {
 				return err
 			}
+			if len([]byte(text)) == 0 {
+				return errors.New("No Response Data")
+			}
 		}
 		return nil
 	case err := <-errMsg:

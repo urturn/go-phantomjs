@@ -47,7 +47,7 @@ func SetCommand(cmd string) {
 	cmd = cmd
 }
 
-func Start(command string, args ...string) (*Phantom, error) {
+func Start(args ...string) (*Phantom, error) {
 	fileLock.Lock()
 	if nbInstance == 0 {
 		wrapperFileName, _ = createWrapperFile()

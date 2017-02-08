@@ -10,6 +10,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 	"sync"
 )
@@ -23,6 +24,12 @@ type Phantom struct {
 	readerErrorLock  *sync.Mutex
 	readerLock       *sync.Mutex
 	nothingReadCount int64
+}
+
+// return Value is used to bundle up the value returned from the reader
+type returnValue struct {
+	val string
+	err error
 }
 
 var nbInstance = 0
@@ -166,37 +173,51 @@ func (p *Phantom) Run(jsFunc string, res *interface{}) error {
 
 	readerOut := bufio.NewReaderSize(p.out, readerBufferSize*1024)
 	readerErrorOut := bufio.NewReaderSize(p.errout, readerBufferSize*1024)
-	resMsg := make(chan string)
-	errMsg := make(chan error)
+	resMsg := make(chan string, 1)
+	errMsg := make(chan error, 1)
+	quit := make(chan bool, 1)
+
+	// var wg sync.WaitGroup
+	// wg.Add(1)
 	go func() {
-		value, scanError := readreader(p.readerLock, readerOut)
+		select {
+		case value := <-readreader(p.readerLock, readerOut):
 
-		if scanError != nil {
-			errMsg <- scanError
+			if value.err != nil {
+				errMsg <- value.err
+				return
+			}
+
+			if value.val == "" {
+				// Nothing to see here
+				return
+			}
+
+			resMsg <- value.val
+		case <-quit:
 			return
 		}
-
-		if value == "" {
-			// Nothing to see here
-			return
-		}
-
-		resMsg <- value
 	}()
 	go func() {
-		value, scanError := readreader(p.readerErrorLock, readerErrorOut)
-		if scanError != nil {
-			errMsg <- scanError
+		select {
+		case value := <-readreader(p.readerErrorLock, readerErrorOut):
+			if value.err != nil {
+				errMsg <- value.err
+				return
+			}
+
+			if value.val == "" {
+				// Nothing to see here
+				return
+			}
+
+			errMsg <- errors.New(value.val)
+		case <-quit:
 			return
 		}
-
-		if value == "" {
-			// Nothing to see here
-			return
-		}
-
-		errMsg <- errors.New(value)
 	}()
+
+	// Wait for Threads to complete
 	select {
 	case text := <-resMsg:
 		if res != nil {
@@ -205,11 +226,17 @@ func (p *Phantom) Run(jsFunc string, res *interface{}) error {
 				return err
 			}
 		}
+		log.Printf("ret val res GT %d", runtime.NumGoroutine())
+
+		// wg.Wait()
 		return nil
 	case err := <-errMsg:
 		if strings.Compare(err.Error(), "EOF") == 0 {
 			return errors.New("PhantomJS is no longer running")
 		}
+		log.Printf("ret val err GT %d", runtime.NumGoroutine())
+
+		// wg.Wait()
 		return err
 	}
 }
@@ -241,8 +268,9 @@ func createWrapperFile() (fileName string, err error) {
 	return wrapper.Name(), nil
 }
 
-func readreader(readerLock *sync.Mutex, reader *bufio.Reader) (string, error) {
+func readreader(readerLock *sync.Mutex, reader *bufio.Reader) chan returnValue {
 	var count = 0
+	retVal := make(chan returnValue, 1)
 	for {
 		readerLock.Lock()
 		data, _, err := reader.ReadLine()
@@ -259,9 +287,11 @@ func readreader(readerLock *sync.Mutex, reader *bufio.Reader) (string, error) {
 			}
 			// Nothing to read and waiting to exit
 			if len(data) == 0 && strings.Contains(err.Error(), "bad file descriptor") {
-				return "", errors.New("Wrapper Error: Bad File Descriptor")
+				retVal <- returnValue{"", errors.New("Wrapper Error: Bad File Descriptor")}
+				return retVal
 			} else if strings.Compare("EOF", err.Error()) != 0 && len(data) == 0 {
-				return "", err
+				retVal <- returnValue{"", err}
+				return retVal
 			}
 		}
 
@@ -269,7 +299,8 @@ func readreader(readerLock *sync.Mutex, reader *bufio.Reader) (string, error) {
 		parts := strings.SplitN(line, " ", 2)
 
 		if strings.HasPrefix(line, "RES") {
-			return parts[1], nil
+			retVal <- returnValue{parts[1], nil}
+			return retVal
 		} else if line != "" {
 			fmt.Printf("LOG %s\n", line)
 			// return "", nil
@@ -277,7 +308,8 @@ func readreader(readerLock *sync.Mutex, reader *bufio.Reader) (string, error) {
 			// return "", errors.New("Error reading response, just got a space")
 		}
 	}
-	return "", errors.New("EOF")
+	retVal <- returnValue{"", errors.New("EOF")}
+	return retVal
 }
 
 func (p *Phantom) sendLine(lines ...string) error {

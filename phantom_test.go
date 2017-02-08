@@ -2,6 +2,7 @@ package phantomjs
 
 import (
 	"log"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -224,6 +225,80 @@ func TestRestartInstance(t *testing.T) {
 	if v != 75025 {
 		t.Errorf("Should be %d but is %f", 75025, v)
 	}
+}
+
+func TestMutlipleThreads(t *testing.T) {
+
+	var wg sync.WaitGroup
+	var stats runtime.MemStats
+	for i := 0; i < 1; i++ {
+		wg.Add(1)
+
+		runtime.ReadMemStats(&stats)
+		log.Printf("MEM: %d, MALC:  %d, GOTHREAD: %d, %s", (stats.Sys / 1000000), stats.Mallocs, runtime.NumGoroutine(), "Starting GO ROUTINE")
+		go func() {
+			var insideStats runtime.MemStats
+			runtime.ReadMemStats(&insideStats)
+			log.Printf("MEM: %d, MALC:  %d, GOTHREAD: %d, %s", (insideStats.Sys / 1000000), insideStats.Mallocs, runtime.NumGoroutine(), "Start of Processor")
+			// Staring new Thread
+			p, err := Start()
+			log.Printf("MEM: %d, MALC:  %d, GOTHREAD: %d, %s", (insideStats.Sys / 1000000), insideStats.Mallocs, runtime.NumGoroutine(), "Started Processor")
+
+			failOnError(err, t)
+			var r interface{}
+			for j := 0; j < 5; j++ {
+				runtime.ReadMemStats(&insideStats)
+				log.Printf("MEM: %d, MALC:  %d, GOTHREAD: %d, %s", (insideStats.Sys / 1000000), insideStats.Mallocs, runtime.NumGoroutine(), "Starting RUN && BEGIN OF LOOP")
+				err = p.Run(`function(done){
+							var a = 0;
+							var b = 1;
+							var c = 0;
+							var page = new WebPage();
+							page.open('http://charles.lescampeurs.org/');
+							page.onLoadFinished = function(status) {
+								for(var i=2; i<=25; i++)
+								{
+									c = b + a;
+									a = b;
+									b = c;
+								}
+								done(c, undefined);
+							}
+				}`, &r)
+				log.Printf("MEM: %d, MALC:  %d, GOTHREAD: %d, %s", (insideStats.Sys / 1000000), insideStats.Mallocs, runtime.NumGoroutine(), "Ending RUN")
+
+				if err == nil {
+					v, ok := r.(float64)
+					if !ok {
+						t.Errorf("Should be an int but is %v", r)
+						p.Exit()
+						defer wg.Done()
+						return
+					}
+					if v != 75025 {
+						t.Errorf("Should be %d but is %f", 75025, v)
+					}
+				} else {
+					if !strings.Contains(err.Error(), "no longer running") && !strings.Contains(err.Error(), "phantomjs instance might be dead") {
+						t.Fatal(err)
+					}
+				}
+				runtime.ReadMemStats(&insideStats)
+
+				log.Printf("MEM: %d, MALC:  %d, GOTHREAD: %d, %s", (insideStats.Sys / 1000000), insideStats.Mallocs, runtime.NumGoroutine(), "Ending Loop \n\n\n ")
+
+			}
+			p.Exit()
+			defer wg.Done()
+			log.Printf("MEM: %d, MALC:  %d, GOTHREAD: %d, %s", (insideStats.Sys / 1000000), insideStats.Mallocs, runtime.NumGoroutine(), "Done with Processor")
+			//Thread Done
+		}()
+		runtime.ReadMemStats(&stats)
+		log.Printf("MEM: %d, MALC:  %d, GOTHREAD: %d, %s", (stats.Sys / 1000000), stats.Mallocs, runtime.NumGoroutine(), "Started GO ROUTINE")
+	}
+	wg.Wait()
+	runtime.ReadMemStats(&stats)
+	log.Printf("MEM: %d, MALC:  %d, GOTHREAD: %d, %s", (stats.Sys / 1000000), stats.Mallocs, runtime.NumGoroutine(), "Done")
 }
 
 func TestMultipleLogs(t *testing.T) {

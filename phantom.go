@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"io/ioutil"
 	"log"
@@ -12,6 +11,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"time"
 )
 
 // Phantom a data structure that interacts with the wrapper file
@@ -28,6 +28,7 @@ type Phantom struct {
 	lineErr         chan string
 	quit            chan bool
 	stopReading     bool
+	once            *sync.Once
 
 	nothingReadCount int64
 }
@@ -94,6 +95,7 @@ func Start(args ...string) (*Phantom, error) {
 		lineErr:          make(chan string, 100),
 		quit:             make(chan bool, 1),
 		stopReading:      false,
+		once:             new(sync.Once),
 		nothingReadCount: 0,
 	}
 	p.readerOut = bufio.NewReaderSize(p.out, readerBufferSize*1024)
@@ -141,7 +143,7 @@ func readreader(readerLock *sync.Mutex, reader *bufio.Reader) (string, error) {
 		if strings.HasPrefix(line, "RES") {
 			return parts[1], nil
 		} else if line != "" {
-			fmt.Printf("LOG %s\n", line)
+			log.Printf("JS-LOG %s\n", line)
 			// return "", nil
 		} else if line != " " {
 			// return "", errors.New("Error reading response, just got a space")
@@ -215,38 +217,28 @@ and wait for the command to end.
 Return an error if one occurred during exit command or if the program output a error value
 */
 func (p *Phantom) Exit() error {
-
-	err := p.Load("phantom.exit()")
-	stoping := false
-	if !p.stopReading {
-		drainBool(p.quit)
-		p.quit <- true
-		stoping = true
-	}
-	p.stopReading = true
-	if err != nil {
-		return err
-	}
-
-	p.readerErrorLock.Lock()
-	p.readerLock.Lock()
-	err = p.cmd.Wait()
-	p.readerErrorLock.Unlock()
-	p.readerLock.Unlock()
-	if err != nil {
-		if !strings.Contains(err.Error(), "signal: killed") {
-			return errors.New("Failed to kill instance :" + err.Error())
+	var err error
+	p.once.Do(func() {
+		err = p.Load("phantom.exit()")
+		if err != nil {
+			return
 		}
-		err = nil
-	}
-	if !stoping {
+		p.quit <- true
+
+		p.readerErrorLock.Lock()
+		p.readerLock.Lock()
+		err = p.cmd.Wait()
+		p.readerLock.Unlock()
+		p.readerErrorLock.Unlock()
+
 		fileLock.Lock()
 		nbInstance--
 		if nbInstance == 0 {
 			err = os.Remove(wrapperFileName)
 		}
 		fileLock.Unlock()
-	}
+	})
+
 	return err
 }
 
@@ -255,23 +247,32 @@ ForceShutdown will forcefully kill phantomjs.
 This will completly terminate the proccess compared to Exit which will safely Exit
 */
 func (p *Phantom) ForceShutdown() error {
-	stoping := false
-	if !p.stopReading {
-		drainBool(p.quit)
-		p.quit <- true
-		stoping = true
-	}
-	p.stopReading = true
-
-	err := p.cmd.Process.Kill()
-	if err != nil {
-		if !strings.Contains(err.Error(), "signal: killed") {
-			return errors.New("Failed to kill instance :" + err.Error())
+	var err error
+	p.once.Do(func() {
+		err = p.Load("phantom.exit()")
+		if err != nil {
+			return
 		}
-		err = nil
-	}
+		p.quit <- true
 
-	if !stoping {
+		p.readerErrorLock.Lock()
+		p.readerLock.Lock()
+		err = stopExec(p.cmd)
+		p.readerLock.Unlock()
+		p.readerErrorLock.Unlock()
+
+		fileLock.Lock()
+		nbInstance--
+		if nbInstance == 0 {
+			err = os.Remove(wrapperFileName)
+		}
+		fileLock.Unlock()
+	})
+
+	if !p.cmd.ProcessState.Exited() {
+		err = p.cmd.Process.Kill()
+		err = p.cmd.Process.Release()
+
 		fileLock.Lock()
 		nbInstance--
 		if nbInstance == 0 {
@@ -279,7 +280,31 @@ func (p *Phantom) ForceShutdown() error {
 		}
 		fileLock.Unlock()
 	}
+
 	return err
+}
+
+func stopExec(cmd *exec.Cmd) error {
+	done := make(chan error, 1)
+	go func() {
+		done <- cmd.Wait()
+	}()
+	select {
+	case <-time.After(3 * time.Second):
+		if err := cmd.Process.Kill(); err != nil {
+			errOther := cmd.Process.Release()
+			if errOther != nil {
+				log.Printf("Error not Handled %s", errOther)
+			}
+			return err
+		}
+		return nil
+	case err := <-done:
+		if err != nil {
+			return err
+		}
+		return nil
+	}
 }
 
 /*

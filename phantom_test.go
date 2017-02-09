@@ -1,7 +1,6 @@
 package phantomjs
 
 import (
-	"log"
 	"runtime"
 	"strings"
 	"sync"
@@ -127,7 +126,7 @@ func TestComplex(t *testing.T) {
 							}
 							done(c, undefined);
 				}`, &r)
-			log.Println("Completed Run in", time.Since(begin))
+			t.Logf("Completed Run in %s", time.Since(begin))
 			failOnError(err, t)
 			v, ok := r.(float64)
 			if !ok {
@@ -145,14 +144,14 @@ func TestComplex(t *testing.T) {
 func TestForceShutdown(t *testing.T) {
 	p, err := Start()
 	failOnError(err, t)
-	defer p.Exit()
 
 	count := 0
 	for i := 0; i < 5; i++ {
 		var r interface{}
 
 		if i == 2 {
-			p.ForceShutdown()
+			err = p.ForceShutdown()
+			failOnError(err, t)
 		}
 		err = p.Run(`function(done){
 							var a = 0;
@@ -166,7 +165,6 @@ func TestForceShutdown(t *testing.T) {
 							}
 							done(c, undefined);
 				}`, &r)
-
 		if err == nil {
 			v, ok := r.(float64)
 			if !ok {
@@ -179,14 +177,16 @@ func TestForceShutdown(t *testing.T) {
 				count++
 			}
 		} else {
-			if !strings.Contains(err.Error(), "no longer running") && !strings.Contains(err.Error(), "phantomjs instance might be dead") {
+			if !strings.Contains(err.Error(), "PhantomJS Instance is dead") && !strings.Contains(err.Error(), "phantomjs instance might be dead") {
 				t.Fatal(err)
 			}
 		}
 	}
 	if count != 2 {
-		t.Fatalf("Didn' reach distination %d", count)
+		t.Fatalf("Didn't reach destination %d", count)
 	}
+	err = p.Exit()
+	failOnError(err, t)
 }
 
 func TestRestartInstance(t *testing.T) {
@@ -231,24 +231,25 @@ func TestMutlipleThreads(t *testing.T) {
 
 	var wg sync.WaitGroup
 	var stats runtime.MemStats
-	for i := 0; i < 1; i++ {
+	for i := 0; i < 3; i++ {
 		wg.Add(1)
 
 		runtime.ReadMemStats(&stats)
-		log.Printf("MEM: %d, MALC:  %d, GOTHREAD: %d, %s", (stats.Sys / 1000000), stats.Mallocs, runtime.NumGoroutine(), "Starting GO ROUTINE")
+
+		t.Logf("MEM: %d, MALC:  %d, GOTHREAD: %d, %s", (stats.Sys / 1000000), stats.Mallocs, runtime.NumGoroutine(), "Starting GO ROUTINE")
 		go func() {
 			var insideStats runtime.MemStats
 			runtime.ReadMemStats(&insideStats)
-			log.Printf("MEM: %d, MALC:  %d, GOTHREAD: %d, %s", (insideStats.Sys / 1000000), insideStats.Mallocs, runtime.NumGoroutine(), "Start of Processor")
+			t.Logf("MEM: %d, MALC:  %d, GOTHREAD: %d, %s", (insideStats.Sys / 1000000), insideStats.Mallocs, runtime.NumGoroutine(), "Start of Processor")
 			// Staring new Thread
 			p, err := Start()
-			log.Printf("MEM: %d, MALC:  %d, GOTHREAD: %d, %s", (insideStats.Sys / 1000000), insideStats.Mallocs, runtime.NumGoroutine(), "Started Processor")
+			t.Logf("MEM: %d, MALC:  %d, GOTHREAD: %d, %s", (insideStats.Sys / 1000000), insideStats.Mallocs, runtime.NumGoroutine(), "Started Processor")
 
 			failOnError(err, t)
 			var r interface{}
 			for j := 0; j < 5; j++ {
 				runtime.ReadMemStats(&insideStats)
-				log.Printf("MEM: %d, MALC:  %d, GOTHREAD: %d, %s", (insideStats.Sys / 1000000), insideStats.Mallocs, runtime.NumGoroutine(), "Starting RUN && BEGIN OF LOOP")
+				t.Logf("MEM: %d, MALC:  %d, GOTHREAD: %d, %s", (insideStats.Sys / 1000000), insideStats.Mallocs, runtime.NumGoroutine(), "Starting RUN && BEGIN OF LOOP")
 				err = p.Run(`function(done){
 							var a = 0;
 							var b = 1;
@@ -265,7 +266,7 @@ func TestMutlipleThreads(t *testing.T) {
 								done(c, undefined);
 							}
 				}`, &r)
-				log.Printf("MEM: %d, MALC:  %d, GOTHREAD: %d, %s", (insideStats.Sys / 1000000), insideStats.Mallocs, runtime.NumGoroutine(), "Ending RUN")
+				t.Logf("MEM: %d, MALC:  %d, GOTHREAD: %d, %s", (insideStats.Sys / 1000000), insideStats.Mallocs, runtime.NumGoroutine(), "Ending RUN")
 
 				if err == nil {
 					v, ok := r.(float64)
@@ -279,26 +280,26 @@ func TestMutlipleThreads(t *testing.T) {
 						t.Errorf("Should be %d but is %f", 75025, v)
 					}
 				} else {
-					if !strings.Contains(err.Error(), "no longer running") && !strings.Contains(err.Error(), "phantomjs instance might be dead") {
+					if !strings.Contains(err.Error(), "PhantomJS Instance is dead") && !strings.Contains(err.Error(), "phantomjs instance might be dead") {
 						t.Fatal(err)
 					}
 				}
 				runtime.ReadMemStats(&insideStats)
 
-				log.Printf("MEM: %d, MALC:  %d, GOTHREAD: %d, %s", (insideStats.Sys / 1000000), insideStats.Mallocs, runtime.NumGoroutine(), "Ending Loop \n\n\n ")
+				t.Logf("MEM: %d, MALC:  %d, GOTHREAD: %d, %s", (insideStats.Sys / 1000000), insideStats.Mallocs, runtime.NumGoroutine(), "Ending Loop \n ")
 
 			}
 			p.Exit()
 			defer wg.Done()
-			log.Printf("MEM: %d, MALC:  %d, GOTHREAD: %d, %s", (insideStats.Sys / 1000000), insideStats.Mallocs, runtime.NumGoroutine(), "Done with Processor")
+			t.Logf("MEM: %d, MALC:  %d, GOTHREAD: %d, %s", (insideStats.Sys / 1000000), insideStats.Mallocs, runtime.NumGoroutine(), "Done with Processor")
 			//Thread Done
 		}()
 		runtime.ReadMemStats(&stats)
-		log.Printf("MEM: %d, MALC:  %d, GOTHREAD: %d, %s", (stats.Sys / 1000000), stats.Mallocs, runtime.NumGoroutine(), "Started GO ROUTINE")
+		t.Logf("MEM: %d, MALC:  %d, GOTHREAD: %d, %s", (stats.Sys / 1000000), stats.Mallocs, runtime.NumGoroutine(), "Started GO ROUTINE")
 	}
 	wg.Wait()
 	runtime.ReadMemStats(&stats)
-	log.Printf("MEM: %d, MALC:  %d, GOTHREAD: %d, %s", (stats.Sys / 1000000), stats.Mallocs, runtime.NumGoroutine(), "Done")
+	t.Logf("MEM: %d, MALC:  %d, GOTHREAD: %d, %s", (stats.Sys / 1000000), stats.Mallocs, runtime.NumGoroutine(), "Done")
 }
 
 func TestMultipleLogs(t *testing.T) {

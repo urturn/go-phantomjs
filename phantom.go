@@ -10,25 +10,37 @@ import (
 	"log"
 	"os"
 	"os/exec"
-	"runtime"
 	"strings"
 	"sync"
 )
 
 // Phantom a data structure that interacts with the wrapper file
 type Phantom struct {
-	cmd              *exec.Cmd
-	in               io.WriteCloser
-	out              io.ReadCloser
-	errout           io.ReadCloser
-	readerErrorLock  *sync.Mutex
-	readerLock       *sync.Mutex
+	cmd             *exec.Cmd
+	in              io.WriteCloser
+	out             io.ReadCloser
+	errout          io.ReadCloser
+	readerErrorLock *sync.Mutex
+	readerLock      *sync.Mutex
+	readerOut       *bufio.Reader
+	readerErr       *bufio.Reader
+	lineOut         chan string
+	lineErr         chan string
+	quit            chan bool
+	stopReading     bool
+
 	nothingReadCount int64
 }
 
 // return Value is used to bundle up the value returned from the reader
 type returnValue struct {
 	val string
+	err error
+}
+
+// return Value is used to bundle up the value returned from the reader
+type exitValue struct {
+	val []byte
 	err error
 }
 
@@ -78,45 +90,164 @@ func Start(args ...string) (*Phantom, error) {
 		errout:           errPipe,
 		readerErrorLock:  new(sync.Mutex),
 		readerLock:       new(sync.Mutex),
+		lineOut:          make(chan string, 100),
+		lineErr:          make(chan string, 100),
+		quit:             make(chan bool, 1),
+		stopReading:      false,
 		nothingReadCount: 0,
 	}
-	err = cmd.Start()
+	p.readerOut = bufio.NewReaderSize(p.out, readerBufferSize*1024)
+	p.readerErr = bufio.NewReaderSize(p.errout, readerBufferSize*1024)
 
+	go p.readFromSTDOut()
+	go p.readFromSTDERR()
+
+	err = cmd.Start()
 	if err != nil {
 		return nil, err
 	}
 
+	// time.Sleep(time.Millisecond)
 	return &p, nil
+}
+
+func readreader(readerLock *sync.Mutex, reader *bufio.Reader) (string, error) {
+	var count = 0
+	for {
+		readerLock.Lock()
+		data, _, err := reader.ReadLine()
+		readerLock.Unlock()
+
+		if err != nil {
+			// Nothing else to read
+			if err == io.EOF && len(data) == 0 {
+				// like the scanner if 100 empty reads panic
+				count++
+				if count >= 100 {
+					break
+				}
+			}
+			// Nothing to read and waiting to exit
+			if len(data) == 0 && strings.Contains(err.Error(), "bad file descriptor") {
+				return "", errors.New("Wrapper Error: Bad File Descriptor")
+			} else if err == io.EOF && len(data) == 0 {
+				return "", err
+			}
+		}
+
+		line := string(data)
+		parts := strings.SplitN(line, " ", 2)
+
+		if strings.HasPrefix(line, "RES") {
+			return parts[1], nil
+		} else if line != "" {
+			fmt.Printf("LOG %s\n", line)
+			// return "", nil
+		} else if line != " " {
+			// return "", errors.New("Error reading response, just got a space")
+		}
+	}
+	return "", errors.New("EOF")
+}
+
+func (p *Phantom) readFromSTDOut() {
+	for !p.stopReading {
+		line, err := readreader(p.readerLock, p.readerOut)
+		if err == io.EOF && line == "" {
+			// Done Reading Data
+			return
+		} else if err != nil && !p.stopReading {
+			// p.Exit()
+			log.Printf("An error occurred while reading stdout: %+v", err)
+			return
+		} else if p.stopReading && line == "" {
+			return
+		} else if line == "" {
+			continue
+		}
+
+		select {
+		case p.lineOut <- line:
+		default:
+			log.Println("no listener attached to stdout " + line)
+		}
+	}
+}
+
+func (p *Phantom) readFromSTDERR() {
+	for !p.stopReading {
+		line, err := readreader(p.readerErrorLock, p.readerErr)
+		if err == io.EOF && line == "" {
+			// Done Reading Data
+			return
+		} else if err != nil && !p.stopReading {
+			// p.Exit()
+			log.Printf("an error occurred while reading stderr: %+v", err)
+			return
+		} else if p.stopReading && line == "" {
+			return
+		} else if line == "" {
+			continue
+		}
+
+		select {
+		case p.lineErr <- line:
+		default:
+			log.Println("no listener attached to sderr " + line)
+		}
+	}
+}
+
+func drainBool(commch chan bool) {
+	for {
+		select {
+		case <-commch:
+		default:
+			return
+		}
+	}
 }
 
 /*
 Exit Phantomjs by sending the "phantomjs.exit()" command
 and wait for the command to end.
 
-Return an error if one occured during exit command or if the program output a error value
+Return an error if one occurred during exit command or if the program output a error value
 */
 func (p *Phantom) Exit() error {
 
 	err := p.Load("phantom.exit()")
+	stoping := false
+	if !p.stopReading {
+		drainBool(p.quit)
+		p.quit <- true
+		stoping = true
+	}
+	p.stopReading = true
 	if err != nil {
 		return err
 	}
+
 	p.readerErrorLock.Lock()
 	p.readerLock.Lock()
 	err = p.cmd.Wait()
 	p.readerErrorLock.Unlock()
 	p.readerLock.Unlock()
 	if err != nil {
-		log.Println(err)
-		return err
+		if !strings.Contains(err.Error(), "signal: killed") {
+			return errors.New("Failed to kill instance :" + err.Error())
+		}
+		err = nil
 	}
-	fileLock.Lock()
-	nbInstance--
-	if nbInstance == 0 {
-		os.Remove(wrapperFileName)
+	if !stoping {
+		fileLock.Lock()
+		nbInstance--
+		if nbInstance == 0 {
+			err = os.Remove(wrapperFileName)
+		}
+		fileLock.Unlock()
 	}
-	fileLock.Unlock()
-	return nil
+	return err
 }
 
 /*
@@ -124,15 +255,30 @@ ForceShutdown will forcefully kill phantomjs.
 This will completly terminate the proccess compared to Exit which will safely Exit
 */
 func (p *Phantom) ForceShutdown() error {
+	stoping := false
+	if !p.stopReading {
+		drainBool(p.quit)
+		p.quit <- true
+		stoping = true
+	}
+	p.stopReading = true
 
 	err := p.cmd.Process.Kill()
-
-	fileLock.Lock()
-	nbInstance--
-	if nbInstance == 0 {
-		os.Remove(wrapperFileName)
+	if err != nil {
+		if !strings.Contains(err.Error(), "signal: killed") {
+			return errors.New("Failed to kill instance :" + err.Error())
+		}
+		err = nil
 	}
-	fileLock.Unlock()
+
+	if !stoping {
+		fileLock.Lock()
+		nbInstance--
+		if nbInstance == 0 {
+			err = os.Remove(wrapperFileName)
+		}
+		fileLock.Unlock()
+	}
 	return err
 }
 
@@ -158,6 +304,16 @@ func (p *Phantom) SetMaxReadTimes(bufferSize int) {
 	}
 }
 
+func drainchan(commch chan string) {
+	for {
+		select {
+		case <-commch:
+		default:
+			return
+		}
+	}
+}
+
 /*
 Run the javascript function passed as a string and wait for the result.
 
@@ -166,79 +322,33 @@ You can pass a function a closure which can take two arguments 1st is the succes
 the 2nd is an err. See TestComplex in the phantom_test.go
 */
 func (p *Phantom) Run(jsFunc string, res *interface{}) error {
+	if p.stopReading {
+		return errors.New("PhantomJS Instance is dead")
+	}
+	// flushing channel incase it read some left over data
+	drainchan(p.lineOut)
+	drainchan(p.lineErr)
+	// end flush
 	err := p.sendLine("RUN", jsFunc, "END")
 	if err != nil {
 		return err
 	}
-
-	readerOut := bufio.NewReaderSize(p.out, readerBufferSize*1024)
-	readerErrorOut := bufio.NewReaderSize(p.errout, readerBufferSize*1024)
-	resMsg := make(chan string, 1)
-	errMsg := make(chan error, 1)
-	quit := make(chan bool, 1)
-
-	// var wg sync.WaitGroup
-	// wg.Add(1)
-	go func() {
-		select {
-		case value := <-readreader(p.readerLock, readerOut):
-
-			if value.err != nil {
-				errMsg <- value.err
-				return
-			}
-
-			if value.val == "" {
-				// Nothing to see here
-				return
-			}
-
-			resMsg <- value.val
-		case <-quit:
-			return
-		}
-	}()
-	go func() {
-		select {
-		case value := <-readreader(p.readerErrorLock, readerErrorOut):
-			if value.err != nil {
-				errMsg <- value.err
-				return
-			}
-
-			if value.val == "" {
-				// Nothing to see here
-				return
-			}
-
-			errMsg <- errors.New(value.val)
-		case <-quit:
-			return
-		}
-	}()
-
-	// Wait for Threads to complete
 	select {
-	case text := <-resMsg:
+	case text := <-p.lineOut:
 		if res != nil {
+
 			err = json.Unmarshal([]byte(text), res)
 			if err != nil {
 				return err
 			}
 		}
-		log.Printf("ret val res GT %d", runtime.NumGoroutine())
-
-		// wg.Wait()
 		return nil
-	case err := <-errMsg:
-		if strings.Compare(err.Error(), "EOF") == 0 {
-			return errors.New("PhantomJS is no longer running")
-		}
-		log.Printf("ret val err GT %d", runtime.NumGoroutine())
-
-		// wg.Wait()
-		return err
+	case errLine := <-p.lineErr:
+		return errors.New(errLine)
+	case <-p.quit:
+		return errors.New("PhantomJS Instance Killed")
 	}
+
 }
 
 /*
@@ -266,50 +376,6 @@ func createWrapperFile() (fileName string, err error) {
 		return "", err
 	}
 	return wrapper.Name(), nil
-}
-
-func readreader(readerLock *sync.Mutex, reader *bufio.Reader) chan returnValue {
-	var count = 0
-	retVal := make(chan returnValue, 1)
-	for {
-		readerLock.Lock()
-		data, _, err := reader.ReadLine()
-		readerLock.Unlock()
-
-		if err != nil {
-			// Nothing else to read
-			if strings.Compare("EOF", err.Error()) == 0 && len(data) == 0 {
-				// like the scanner if 100 empty reads panic
-				count++
-				if count >= 100 {
-					break
-				}
-			}
-			// Nothing to read and waiting to exit
-			if len(data) == 0 && strings.Contains(err.Error(), "bad file descriptor") {
-				retVal <- returnValue{"", errors.New("Wrapper Error: Bad File Descriptor")}
-				return retVal
-			} else if strings.Compare("EOF", err.Error()) != 0 && len(data) == 0 {
-				retVal <- returnValue{"", err}
-				return retVal
-			}
-		}
-
-		line := string(data)
-		parts := strings.SplitN(line, " ", 2)
-
-		if strings.HasPrefix(line, "RES") {
-			retVal <- returnValue{parts[1], nil}
-			return retVal
-		} else if line != "" {
-			fmt.Printf("LOG %s\n", line)
-			// return "", nil
-		} else if line != " " {
-			// return "", errors.New("Error reading response, just got a space")
-		}
-	}
-	retVal <- returnValue{"", errors.New("EOF")}
-	return retVal
 }
 
 func (p *Phantom) sendLine(lines ...string) error {

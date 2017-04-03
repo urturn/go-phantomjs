@@ -59,6 +59,14 @@ Create a new `Phantomjs` instance and return it as a pointer.
 
 If an error occurs during command start, return it instead.
 */
+
+var cmd = "phantomjs"
+
+// SetCommand lets you specify the binary for phantomjs
+func SetCommand(cmd string) {
+	cmd = cmd
+}
+
 func Start(args ...string) (*Phantom, error) {
 	fileLock.Lock()
 	if nbInstance == 0 {
@@ -67,7 +75,7 @@ func Start(args ...string) (*Phantom, error) {
 	nbInstance++
 	fileLock.Unlock()
 	args = append(args, wrapperFileName)
-	cmd := exec.Command("phantomjs", args...)
+	cmd := exec.Command(cmd, args...)
 
 	inPipe, err := cmd.StdinPipe()
 	if err != nil {

@@ -1,7 +1,11 @@
 package phantomjs
 
 import (
+	"runtime"
+	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 func TestStartStop(t *testing.T) {
@@ -79,6 +83,253 @@ func TestDoubleErrorSendDontCrash(t *testing.T) {
 	failOnError(err, t)
 	defer p.Exit()
 	p.Run("function(done) {done(null, 'manual'); done(null, 'should not panic');}", nil)
+}
+
+func TestThrow(t *testing.T) {
+	p, err := Start()
+	if err != nil {
+		panic(err)
+	}
+	defer p.Exit() // Don't forget to kill phantomjs at some point.
+	var result interface{}
+	err = p.Run("function() { throw 'Ooops' }", &result)
+	if err == nil {
+		t.Fatal("Expected an Error")
+	}
+	if !strings.Contains("\"Ooops\"", err.Error()) {
+		t.Fatal(err)
+	}
+}
+
+func TestComplex(t *testing.T) {
+	var wg sync.WaitGroup
+
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			p, err := Start()
+			failOnError(err, t)
+			defer p.Exit()
+			var r interface{}
+			begin := time.Now()
+
+			p.Run(`function(done){
+							var a = 0;
+							var b = 1;
+							var c = 0;
+							for(var i=2; i<=25; i++)
+							{
+    						c = b + a;
+								a = b;
+								b = c;
+							}
+							done(c, undefined);
+				}`, &r)
+			t.Logf("Completed Run in %s", time.Since(begin))
+			failOnError(err, t)
+			v, ok := r.(float64)
+			if !ok {
+				t.Errorf("Should be an int but is %v", r)
+				return
+			}
+			if v != 75025 {
+				t.Errorf("Should be %d but is %f", 75025, v)
+			}
+		}()
+	}
+	wg.Wait()
+}
+
+func TestForceShutdown(t *testing.T) {
+	p, err := Start()
+	failOnError(err, t)
+
+	count := 0
+	for i := 0; i < 5; i++ {
+		var r interface{}
+
+		if i == 2 {
+			err = p.ForceShutdown()
+			failOnError(err, t)
+		}
+		err = p.Run(`function(done){
+							var a = 0;
+							var b = 1;
+							var c = 0;
+							for(var i=2; i<=25; i++)
+							{
+								c = b + a;
+								a = b;
+								b = c;
+							}
+							done(c, undefined);
+				}`, &r)
+		if err == nil {
+			v, ok := r.(float64)
+			if !ok {
+				t.Errorf("Should be an int but is %v", r)
+				return
+			}
+			if v != 75025 {
+				t.Errorf("Should be %d but is %f", 75025, v)
+			} else {
+				count++
+			}
+		} else {
+			if !strings.Contains(err.Error(), "PhantomJS Instance is dead") && !strings.Contains(err.Error(), "phantomjs instance might be dead") {
+				t.Fatal(err)
+			}
+		}
+	}
+	if count != 2 {
+		t.Fatalf("Didn't reach destination %d", count)
+	}
+	err = p.Exit()
+	failOnError(err, t)
+}
+
+func TestRestartInstance(t *testing.T) {
+	p, err := Start()
+	defer p.Exit()
+	failOnError(err, t)
+
+	err = p.ForceShutdown()
+	failOnError(err, t)
+
+	p, err = Start()
+	defer p.Exit()
+	failOnError(err, t)
+
+	var r interface{}
+
+	err = p.Run(`function(done){
+						var a = 0;
+						var b = 1;
+						var c = 0;
+						for(var i=2; i<=25; i++)
+						{
+							c = b + a;
+							a = b;
+							b = c;
+						}
+						done(c, undefined);
+			}`, &r)
+
+	failOnError(err, t)
+	v, ok := r.(float64)
+	if !ok {
+		t.Errorf("Should be an int but is %v", r)
+		return
+	}
+	if v != 75025 {
+		t.Errorf("Should be %d but is %f", 75025, v)
+	}
+}
+
+func TestMutlipleThreads(t *testing.T) {
+
+	var wg sync.WaitGroup
+	var stats runtime.MemStats
+	for i := 0; i < 3; i++ {
+		wg.Add(1)
+
+		runtime.ReadMemStats(&stats)
+
+		t.Logf("MEM: %d, MALC:  %d, GOTHREAD: %d, %s", (stats.Sys / 1000000), stats.Mallocs, runtime.NumGoroutine(), "Starting GO ROUTINE")
+		go func() {
+			var insideStats runtime.MemStats
+			runtime.ReadMemStats(&insideStats)
+			t.Logf("MEM: %d, MALC:  %d, GOTHREAD: %d, %s", (insideStats.Sys / 1000000), insideStats.Mallocs, runtime.NumGoroutine(), "Start of Processor")
+			// Staring new Thread
+			p, err := Start()
+			t.Logf("MEM: %d, MALC:  %d, GOTHREAD: %d, %s", (insideStats.Sys / 1000000), insideStats.Mallocs, runtime.NumGoroutine(), "Started Processor")
+
+			failOnError(err, t)
+			var r interface{}
+			for j := 0; j < 5; j++ {
+				runtime.ReadMemStats(&insideStats)
+				t.Logf("MEM: %d, MALC:  %d, GOTHREAD: %d, %s", (insideStats.Sys / 1000000), insideStats.Mallocs, runtime.NumGoroutine(), "Starting RUN && BEGIN OF LOOP")
+				err = p.Run(`function(done){
+							var a = 0;
+							var b = 1;
+							var c = 0;
+							var page = new WebPage();
+							page.open('http://charles.lescampeurs.org/');
+							page.onLoadFinished = function(status) {
+								for(var i=2; i<=25; i++)
+								{
+									c = b + a;
+									a = b;
+									b = c;
+								}
+								done(c, undefined);
+							}
+				}`, &r)
+				t.Logf("MEM: %d, MALC:  %d, GOTHREAD: %d, %s", (insideStats.Sys / 1000000), insideStats.Mallocs, runtime.NumGoroutine(), "Ending RUN")
+
+				if err == nil {
+					v, ok := r.(float64)
+					if !ok {
+						t.Errorf("Should be an int but is %v", r)
+						p.Exit()
+						defer wg.Done()
+						return
+					}
+					if v != 75025 {
+						t.Errorf("Should be %d but is %f", 75025, v)
+					}
+				} else {
+					if !strings.Contains(err.Error(), "PhantomJS Instance is dead") && !strings.Contains(err.Error(), "phantomjs instance might be dead") {
+						t.Fatal(err)
+					}
+				}
+				runtime.ReadMemStats(&insideStats)
+
+				t.Logf("MEM: %d, MALC:  %d, GOTHREAD: %d, %s", (insideStats.Sys / 1000000), insideStats.Mallocs, runtime.NumGoroutine(), "Ending Loop \n ")
+
+			}
+			p.Exit()
+			defer wg.Done()
+			t.Logf("MEM: %d, MALC:  %d, GOTHREAD: %d, %s", (insideStats.Sys / 1000000), insideStats.Mallocs, runtime.NumGoroutine(), "Done with Processor")
+			//Thread Done
+		}()
+		runtime.ReadMemStats(&stats)
+		t.Logf("MEM: %d, MALC:  %d, GOTHREAD: %d, %s", (stats.Sys / 1000000), stats.Mallocs, runtime.NumGoroutine(), "Started GO ROUTINE")
+	}
+	wg.Wait()
+	runtime.ReadMemStats(&stats)
+	t.Logf("MEM: %d, MALC:  %d, GOTHREAD: %d, %s", (stats.Sys / 1000000), stats.Mallocs, runtime.NumGoroutine(), "Done")
+}
+
+func TestMultipleLogs(t *testing.T) {
+	p, err := Start()
+	defer p.Exit()
+	failOnError(err, t)
+	var r interface{}
+
+	err = p.Run(`function(done){
+						var a = 0;
+						var b = 1;
+						var c = 0;
+						for(var i=2; i<=25; i++)
+						{
+							c = b + a;
+							a = b;
+							b = c;
+							console.log(c)
+						}
+						done(c, undefined);
+			}`, &r)
+	failOnError(err, t)
+	v, ok := r.(float64)
+	if !ok {
+		t.Errorf("Should be an int but is %v", r)
+		return
+	}
+	if v != 75025 {
+		t.Errorf("Should be %d but is %f", 75025, v)
+	}
 }
 
 func assertFloatResult(jsFunc string, expected float64, p *Phantom, t *testing.T) {

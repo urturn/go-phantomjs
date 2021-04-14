@@ -5,7 +5,7 @@ import (
 )
 
 func ExampleWithResult() {
-	p, err := Start()
+	p, err := Start("phantomjs")
 	if err != nil {
 		panic(err)
 	}
@@ -24,7 +24,7 @@ func ExampleWithResult() {
 }
 
 func ExampleWithError() {
-	p, err := Start()
+	p, err := Start("phantomjs")
 	if err != nil {
 		panic(err)
 	}
